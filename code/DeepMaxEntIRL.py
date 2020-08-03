@@ -24,7 +24,7 @@ class Network:
         x = tf.keras.layers.Dense(128, activation='tanh', name='layer2')(x)
         x = tf.keras.layers.Dense(256, activation='tanh', name='layer3')(x)
         x = tf.keras.layers.Dropout(rate=0.01)(x)
-        outputs = tf.keras.layers.Dense(1)(x)
+        outputs = tf.keras.layers.Dense(1, )(x)
 
         return outputs
 
@@ -169,7 +169,8 @@ class DeepMaxEntIRL:
                     grad_for_state.append(grad_reward[k] * svf_difference[j] - regluarizer)
 
                 # grad_for_state = [grad_reward[k] * svf_difference[j] for k in range(len(grad_reward))]
-                self.optimizer.apply_gradients(zip(grad_for_state, self.reward.trainable_variables))
+            self.optimizer.apply_gradients(zip(grad_for_state, self.reward.trainable_variables))
+
         """release resources"""
         del tape
 
@@ -177,17 +178,20 @@ class DeepMaxEntIRL:
         print('INFO: Training start!')
         self.svf = self.get_svf()
         self.optimizer = tf.optimizers.Adam(self.lr)
-        self.writer = tf.summary.create_file_writer('./log/train')
+        self.writer = tf.summary.create_file_writer('./log/train_irl')
 
         for i in range(self.epochs):
             t_s = time.clock()
             self.train_step()
             t_e = time.clock()
 
+            reward_list = self.reward(self.feature_matrix.astype('float32')) # test code
+
             print("INFO: iteration={}, time cost={}s".format(i, t_e - t_s))
 
             """ summarying the weights variation """
             with self.writer.as_default():
+                tf.summary.histogram(name='reward', data=reward_list, step=i) # test code
                 for index in range(len(self.reward.weights)):
                     if len(self.reward.weights[index].shape) == 2:
                         tf.summary.histogram(name='Theta_' + str(index), data=self.reward.weights[index], step=i)

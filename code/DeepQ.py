@@ -21,8 +21,7 @@ class Network:
         x = tf.keras.layers.Dense(64, activation='tanh', kernel_regularizer=regularzier, name='layer1')(input_tensor)
         x = tf.keras.layers.Dense(128, activation='tanh', kernel_regularizer=regularzier, name='layer2')(x)
         x = tf.keras.layers.Dense(256, activation='tanh', kernel_regularizer=regularzier, name='layer3')(x)
-        x = tf.keras.layers.Dropout(rate=0.01)(x)
-        outputs = tf.keras.layers.Dense(self.user_num, activation='softmax')(x)
+        outputs = tf.keras.layers.Dense(self.user_num)(x)
 
         return outputs
 
@@ -88,25 +87,24 @@ class DQNAgent:
         self.target_net.set_weights(self.evaluate_net.get_weights())
 
     def learn(self, state, action, reward, next_state, done):
-        self.replayer.store(state, action, reward, next_state,
-                            done)  # 存储经验
-    
-        states, actions, rewards, next_states, dones = \
-            self.replayer.sample(self.batch_size)  # 经验回放
-    
-        next_qs = self.target_net.predict(next_states)
-        next_max_qs = next_qs.max(axis=-1)
-        us = rewards + self.gamma * (1. - dones) * next_max_qs
-        targets = self.evaluate_net.predict(states)
-        targets[np.arange(us.shape[0]), actions] = us
-        self.evaluate_net.fit(states, targets, verbose=0)
-    
         if done:  # 更新目标网络
             self.target_net.set_weights(self.evaluate_net.get_weights())
+        else:
+            self.replayer.store(state, action, reward, next_state, done)  # 存储经验
+
+            states, actions, rewards, next_states, dones = \
+                self.replayer.sample(self.batch_size)  # 经验回放
+
+            next_qs = self.target_net.predict(next_states)
+            next_max_qs = next_qs.max(axis=-1)
+            us = rewards + self.gamma * (1. - dones) * next_max_qs
+            targets = self.evaluate_net.predict(states)
+            targets[np.arange(us.shape[0]), actions] = us
+            self.evaluate_net.fit(states, targets, verbose=0)
 
     def decide(self, state):  # epsilon贪心策略
         if np.random.rand() < self.epsilon:
-            return np.random.randint(self.user_num)
+            return [np.random.randint(self.user_num)]
         qs = self.evaluate_net.predict(state[np.newaxis])
         action = [np.argmax(qs)]
         return action

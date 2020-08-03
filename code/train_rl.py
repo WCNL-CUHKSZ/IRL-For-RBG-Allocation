@@ -20,14 +20,14 @@ if __name__ == '__main__':
     RBG_NUM = 1
     USER_NUM = 3
     FEATURE_DIM = 4
-    TTI_SUM = 500
+    TTI_SUM = 200
     RANDOM_SEED = 7
     POSSION_AVG = 10 / 1000
     REPLAYER_CAPACITY = 5000
     LAMBDA_AVG = 10000
     LAMBDA_FAIRNESS = 10000
     EPOCH = 100
-    INTERNAL = 5
+    INTERNAL = 10
     LR = 0.0005
     SAMPLE_FRAC = 0.6
     REWARD_FLAG = None
@@ -52,7 +52,9 @@ if __name__ == '__main__':
     )
 
     agent.evaluate_net.summary()
-    reward = tf.keras.models.load_model('static/tn10_tl1000_reward.h5')
+    reward = tf.keras.models.load_model('log/20200801/tn20_tl200_reward.h5')
+    reward.summary()
+    writer = tf.summary.create_file_writer('./log/train_rl')
 
     tti_list = []
     average_list = []
@@ -61,7 +63,7 @@ if __name__ == '__main__':
 
     for game in range(EPOCH):
         time_start = time.clock()
-        INITIAL_USER_START = int((game + 1) / INTERNAL)
+        INITIAL_USER_START = int(game / INTERNAL)
         av_ues_idx = list(range(INITIAL_USER_START, INITIAL_USER_START + USER_NUM))
 
         pf_state = pf_env.reset(av_ues_info, av_ues_idx)
@@ -69,6 +71,7 @@ if __name__ == '__main__':
 
         tti = 0
         episode_reward = 0
+        s_middle = np.zeros(shape=(USER_NUM * FEATURE_DIM, ))
 
         while (tti < TTI_SUM):
             POSSION_ADD_USER = 0
@@ -80,23 +83,30 @@ if __name__ == '__main__':
             if rl_env.bs.newtx_rbg_ue == [None for _ in range(RBG_NUM)]:
                 rl_next_state, rl_reward, rl_done, rl_info = rl_env.step(None, POSSION_ADD_USER, INITIAL_USER_START)
             else:
-                rl_action = agent.decide(rl_state.reshape(-1))
+                rl_action = agent.decide(s_middle)
+                print('s={},a={}'.format(s_middle,rl_action))
                 rl_next_state, rl_reward, rl_done, rl_info = rl_env.step(rl_action, POSSION_ADD_USER, INITIAL_USER_START)
 
                 """ calculate the middle state """
-                s_former = rl_state
-                s_latter = rl_next_state
-                s_middle = rl_next_state.reshape(-1) - rl_state.reshape(-1)
-                s_middle[s_middle > 0] = 1
-                s_middle[s_middle == 0] = 0
-                s_middle[s_middle < 0] = -1
-                relative_reward = reward.predict(s_middle[np.newaxis])[0]
+                s_middle_next = rl_next_state.reshape(-1) - rl_state.reshape(-1)
+                s_middle_next[s_middle_next > 0] = 1
+                s_middle_next[s_middle_next == 0] = 0
+                s_middle_next[s_middle_next < 0] = -1
+                relative_reward = reward.predict(s_middle_next[np.newaxis])[0]
 
-                agent.learn(rl_state.reshape(-1), rl_action, relative_reward, rl_next_state.reshape(-1), done=False)
+                agent.learn(s_middle, rl_action, relative_reward, s_middle_next, done=False)
+
                 episode_reward += relative_reward
                 rl_state = rl_next_state
+                s_middle = s_middle_next
 
             tti += 1
+
+        ''' visualize the agent's weights'''
+        with writer.as_default():
+            for index in range(len(agent.evaluate_net.weights)):
+                tf.summary.histogram(str(index), data=agent.evaluate_net.weights[index], step=game)
+            writer.flush()
 
         ''' get result '''
         pf_result = pf_env.get_result()
@@ -105,14 +115,14 @@ if __name__ == '__main__':
         tti_list.append(tti)
         average_list.append(rl_result['average'])
         fariness_list.append(rl_result['fairness'])
-        reward_list.append(episode_reward)
+        reward_list.append(episode_reward / TTI_SUM)
 
         ''' update target netwrok '''
         agent.learn(None, None, None, None, done=True)
         ''' clear the replayer and save the model '''
         agent.save(epoch=game + 1)
 
-        record_file = './rl2pf_train.txt'
+        record_file = './log/rl2pf_train.txt'
 
         with open(record_file, 'a') as file:
             record = 'Epoch={}, user_num={}, ' \
@@ -161,4 +171,4 @@ if __name__ == '__main__':
         plt.title('Fairness')
         plt.plot(fariness_list)
 
-        plt.savefig('record.png')
+        plt.savefig('./log/record.png')

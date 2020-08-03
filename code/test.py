@@ -1,15 +1,15 @@
-import tensorflow as tf
-import numpy as np
-
-input_tensor = tf.keras.Input(shape=[30])
-x = tf.keras.layers.Dense(64)(input_tensor)
-x = tf.keras.layers.Dense(128)(x)
-x = tf.keras.layers.Dense(256)(x)
-x = tf.keras.layers.Dense(1)(x)
-
-model = tf.keras.Model(input_tensor, x)
-for item in model.weights:
-    print(len(item.shape))
+# import tensorflow as tf
+# import numpy as np
+#
+# input_tensor = tf.keras.Input(shape=[30])
+# x = tf.keras.layers.Dense(64)(input_tensor)
+# x = tf.keras.layers.Dense(128)(x)
+# x = tf.keras.layers.Dense(256)(x)
+# x = tf.keras.layers.Dense(1)(x)
+#
+# model = tf.keras.Model(input_tensor, x)
+# for item in model.weights:
+#     print(len(item.shape))
 # writer = tf.summary.create_file_writer('./log/train')
 # with writer.as_default():
 #     for i in range(100):
