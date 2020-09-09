@@ -26,7 +26,7 @@ class Network:
         return outputs
 
     def build(self):
-        input_tensor = tf.keras.Input(shape=[self.feature_dim * self.user_num])
+        input_tensor = tf.keras.Input(shape=[self.user_num * self.feature_dim, ])
         output_tensor = self.backbone(input_tensor)
         model = tf.keras.Model(input_tensor, output_tensor, name='AGENT')
 
@@ -65,7 +65,7 @@ class DQNAgent:
                  gamma=0.99,
                  epsilon=0.001,
                  replayer_capacity=10000,
-                 batch_size=64):
+                 batch_size=128):
 
         self.user_num = user_num
         self.rbg_num = rbg_num

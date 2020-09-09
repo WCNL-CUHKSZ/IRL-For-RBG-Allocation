@@ -14,6 +14,9 @@ import time
 import os
 
 from simulator.ProportionalFairness import PROPORTIONALFAIRNESS
+from simulator.Opportunistic import OPPORTUNISTIC
+from simulator.RoundRobin import ROUNDROBIN
+from simulator.RandomSelection import RANDOMSELECTION
 
 class Replayer:
     def __init__(self, capacity):
@@ -22,8 +25,8 @@ class Replayer:
             columns=['state',
                      'action',
                      'reward',
-                     'next_state',
-                     'done'])
+                     'label']
+)
         self.i = 0
         self.count = 0
         self.capacity = capacity
@@ -44,20 +47,23 @@ class Replayer:
     def clear(self):
         self.__init__(capacity=self.capacity)
 
-class ENV:
+class COLLECT:
     def __init__(
             self,
+            env_flag,
             user_num,
             rbg_num,
             feature_dim,
-            trajectory_length,
-            trajectory_number
+            traj_length,
+            traj_number,
+            replayer_capacity
                  ):
+        self.env_flag = env_flag
         self.user_num = user_num
         self.rbg_num = rbg_num
         self.feature_dim = feature_dim
 
-        self.n_states = trajectory_number * trajectory_length
+        self.n_states = traj_number * traj_length
         self.n_actions = user_num
 
         self.av_ues_info = self.user_info_threshold(
@@ -65,13 +71,32 @@ class ENV:
             threshold_min=10e+5,
             threshold_max=10e+6)
 
-        self.env = PROPORTIONALFAIRNESS(
-            lambda_avg=1,
-            lambda_fairness=1,
-            reward_flag=None)
-        self.length = trajectory_length
-        self.number = trajectory_number
-        self.replayer = Replayer(capacity=self.length)
+        if self.env_flag == 'PF':
+            self.env = PROPORTIONALFAIRNESS(
+                lambda_avg=1,
+                lambda_fairness=1,
+                reward_flag=None)
+        if self.env_flag == 'OP':
+            self.env = OPPORTUNISTIC(
+                lambda_avg=1,
+                lambda_fairness=1,
+                reward_flag=None)
+        if self.env_flag == 'RR':
+            self.env = ROUNDROBIN(
+                lambda_avg=1,
+                lambda_fairness=1,
+                reward_flag=None)
+        if self.env_flag == 'RS':
+            self.env = RANDOMSELECTION(
+                lambda_avg=1,
+                lambda_fairness=1,
+                reward_flag=None)
+
+        self.length = traj_length
+        self.number = traj_number
+        self.replayer_capacity = replayer_capacity
+        self.e_replayer = Replayer(capacity=self.replayer_capacity)
+        self.g_replayer = Replayer(capacity=self.replayer_capacity)
 
     def load_av_ue_info(self, file='simulator/ue_info.pkl'):
         assert (os.path.exists(file) == True)
@@ -91,11 +116,8 @@ class ENV:
                 filtered_user_info.append(user_info[i])
         return filtered_user_info
 
-    def generate(self):
-        print('INFO: Generating trajectories!')
-        ge_start = time.clock()
-        memory = []
-        for i in range(self.number):
+    def run(self, replayer, rs, re):
+        for i in range(rs, re):
             av_ues_idx_start = i
             av_ues_idx = list(range(av_ues_idx_start, av_ues_idx_start + self.user_num))
             state = self.env.reset(self.av_ues_info, av_ues_idx)
@@ -103,36 +125,40 @@ class ENV:
             j = 0
             while (j < self.length):
                 action = self.env.action()
-                next_state, reward, done, info = self.env.step(None, 0, 0)
+                if self.env_flag == 'PF':
+                    next_state, reward, done, info = self.env.step(None, 0, 0)
+                else:
+                    next_state, reward, done, info = self.env.step(action, 0, 0)
                 ''' save the transition '''
-                self.replayer.store(state, action, reward, next_state, done)
+                # state = np.argsort(state, axis=1)
+                replayer.store(state.reshape(-1), action[0], reward, 1.0)
                 state = next_state
 
                 j += 1
 
-            memory.append(self.replayer.memory[['state', 'action']])
-            self.replayer.clear()
+        replayer.memory.dropna(inplace=True)
+        replayer.memory.reset_index(inplace=True, drop=True)
 
-        state_list = []
-        action_list = []
-        for item in memory:
-            state_list.append(item['state'])
-            action_list.append(item['action'])
+        traj_state = np.array(replayer.memory['state'].tolist())
+        for i in range(traj_state.shape[1]):
+            traj_state[:, i]= (traj_state[:, i] - traj_state[:, i].mean()) / (traj_state[:, i].std() + 1e-3)
+            
+        replayer.memory['state'] = traj_state.tolist()
 
+        return replayer.memory
+
+    def generate(self):
+        print('INFO: Generating trajectories!')
+        ge_start = time.clock()
+        
+        e_traj = self.run(self.e_replayer, rs=0, re=self.number)
+        g_traj = self.run(self.g_replayer, rs=self.number, re=self.number * 2)
+        
         ge_end = time.clock()
         print('INFO: Trajectories generation accomplished, time cost={}s'.format(ge_end - ge_start))
 
-        return {'s':state_list, 'a':action_list}
+        return e_traj, g_traj
 
-    def feature_matrix(self):
-        fm = np.load('static/fm.npy')
-
-        return fm
-
-    def transition_probability(self):
-        P_sas = np.load('static/P_sas.npy')
-
-        return P_sas
 
 
 

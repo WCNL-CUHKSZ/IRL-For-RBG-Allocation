@@ -4,9 +4,15 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 import time
 import logging
-logging.disable(30)
+import os
 
-from ProportionalFairness import PROPORTIONALFAIRNESS, load_av_ue_info
+logging.disable(30)
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+
+from simulator.ProportionalFairness import PROPORTIONALFAIRNESS, load_av_ue_info
+from simulator.Opportunistic import OPPORTUNISTIC
+from simulator.RoundRobin import ROUNDROBIN
+from simulator.RandomSelection import RANDOMSELECTION
 from DeepQ import DQNAgent
 
 def user_info_threshold(user_info, threshold_min, threshold_max):
@@ -15,6 +21,35 @@ def user_info_threshold(user_info, threshold_min, threshold_max):
         if (user_info[i]['buffer'] > threshold_min) and (user_info[i]['buffer'] < threshold_max):
             filtered_user_info.append(user_info[i])
     return filtered_user_info
+
+def get_env(env_flag):
+    if env_flag == 'PF':
+        env = PROPORTIONALFAIRNESS(
+            lambda_avg=LAMBDA_AVG,
+            lambda_fairness=LAMBDA_FAIRNESS,
+            reward_flag=REWARD_FLAG)
+    if env_flag == 'OP':
+        env = OPPORTUNISTIC(
+            lambda_avg=LAMBDA_AVG,
+            lambda_fairness=LAMBDA_FAIRNESS,
+            reward_flag=REWARD_FLAG)
+    if env_flag == 'RR':
+        env = ROUNDROBIN(
+            lambda_avg=LAMBDA_AVG,
+            lambda_fairness=LAMBDA_FAIRNESS,
+            reward_flag=REWARD_FLAG)
+    else:
+        env = RANDOMSELECTION(
+            lambda_avg=LAMBDA_AVG,
+            lambda_fairness=LAMBDA_FAIRNESS,
+            reward_flag=REWARD_FLAG)
+
+    return env
+
+def encoding(state, user_num):
+    encoded_state = np.argsort(state, axis=0)
+
+    return encoded_state
 
 if __name__ == '__main__':
     RBG_NUM = 1
@@ -31,11 +66,9 @@ if __name__ == '__main__':
     LR = 0.0005
     SAMPLE_FRAC = 0.6
     REWARD_FLAG = None
+    ENV_FLAG = 'OP'
 
-    pf_env = PROPORTIONALFAIRNESS(
-        lambda_avg=LAMBDA_AVG,
-        lambda_fairness=LAMBDA_FAIRNESS,
-        reward_flag=REWARD_FLAG)
+    co_env = get_env(ENV_FLAG)
     rl_env = PROPORTIONALFAIRNESS(
         lambda_avg=LAMBDA_AVG,
         lambda_fairness=LAMBDA_FAIRNESS,
@@ -52,7 +85,7 @@ if __name__ == '__main__':
     )
 
     agent.evaluate_net.summary()
-    reward = tf.keras.models.load_model('log/20200801/tn20_tl200_reward.h5')
+    reward = tf.keras.models.load_model('reward.h5')
     reward.summary()
     writer = tf.summary.create_file_writer('./log/train_rl')
 
@@ -66,39 +99,38 @@ if __name__ == '__main__':
         INITIAL_USER_START = int(game / INTERNAL)
         av_ues_idx = list(range(INITIAL_USER_START, INITIAL_USER_START + USER_NUM))
 
-        pf_state = pf_env.reset(av_ues_info, av_ues_idx)
+        co_state = co_env.reset(av_ues_info, av_ues_idx)
         rl_state = rl_env.reset(av_ues_info, av_ues_idx)
+        rl_state = encoding(rl_state, USER_NUM)
 
         tti = 0
         episode_reward = 0
-        s_middle = np.zeros(shape=(USER_NUM * FEATURE_DIM, ))
 
         while (tti < TTI_SUM):
             POSSION_ADD_USER = 0
 
-            ''' PF Allocation '''
-            pf_next_state, pf_reward, pf_done, pf_info = pf_env.step(None, POSSION_ADD_USER, INITIAL_USER_START)
+            ''' CO Allocation '''
+            co_action = co_env.action()
+            if ENV_FLAG == 'PF':
+                co_next_state, co_reward, co_done, co_info = co_env.step(None, POSSION_ADD_USER, INITIAL_USER_START)
+
+            else:
+                co_next_state, co_reward, co_done, co_info = co_env.step(co_action, POSSION_ADD_USER, INITIAL_USER_START)
 
             ''' RL Allocation '''
             if rl_env.bs.newtx_rbg_ue == [None for _ in range(RBG_NUM)]:
                 rl_next_state, rl_reward, rl_done, rl_info = rl_env.step(None, POSSION_ADD_USER, INITIAL_USER_START)
             else:
-                rl_action = agent.decide(s_middle)
-                print('s={},a={}'.format(s_middle,rl_action))
+                rl_action = agent.decide(rl_state)
+                print('s={}, RL a={}, {} a={}'.format(rl_state, rl_action, ENV_FLAG, co_action))
                 rl_next_state, rl_reward, rl_done, rl_info = rl_env.step(rl_action, POSSION_ADD_USER, INITIAL_USER_START)
 
-                """ calculate the middle state """
-                s_middle_next = rl_next_state.reshape(-1) - rl_state.reshape(-1)
-                s_middle_next[s_middle_next > 0] = 1
-                s_middle_next[s_middle_next == 0] = 0
-                s_middle_next[s_middle_next < 0] = -1
-                relative_reward = reward.predict(s_middle_next[np.newaxis])[0]
-
-                agent.learn(s_middle, rl_action, relative_reward, s_middle_next, done=False)
+                rl_next_state = encoding(rl_next_state, USER_NUM)
+                relative_reward = reward.predict(rl_state[np.newaxis])[0]
+                agent.learn(rl_state, rl_action, relative_reward, rl_next_state, done=False)
 
                 episode_reward += relative_reward
                 rl_state = rl_next_state
-                s_middle = s_middle_next
 
             tti += 1
 
@@ -109,7 +141,7 @@ if __name__ == '__main__':
             writer.flush()
 
         ''' get result '''
-        pf_result = pf_env.get_result()
+        co_result = co_env.get_result()
         rl_result = rl_env.get_result()
 
         tti_list.append(tti)
@@ -122,7 +154,7 @@ if __name__ == '__main__':
         ''' clear the replayer and save the model '''
         agent.save(epoch=game + 1)
 
-        record_file = './log/rl2pf_train.txt'
+        record_file = './log/rl2co_train.txt'
 
         with open(record_file, 'a') as file:
             record = 'Epoch={}, user_num={}, ' \
@@ -130,7 +162,7 @@ if __name__ == '__main__':
                      '{} ues_rate:[avg={},fairness={}], ' \
                      'Episode Reward={}'.format(
                 game+1, len(rl_env.bs.ues),
-                'PF', pf_result['average'], pf_result['fairness'],
+                ENV_FLAG, co_result['average'], co_result['fairness'],
                 'RL', rl_result['average'], rl_result['fairness'],
                 episode_reward
             )
@@ -143,9 +175,9 @@ if __name__ == '__main__':
         print('Epoch={}, time cost={} s, episode reward={}'.format(game + 1, time_end - time_start, episode_reward))
         print('User start index={}'.format(INITIAL_USER_START))
 
-        print('PF avg better={}'.format(record[9][record[9] > record[17]].shape[0]))
-        print('PF 5%-tile better={}'.format(record[11][record[11] > record[19]].shape[0]))
-        print('PF both better={}'.format(record[(record[9] > record[17]) & (record[11] > record[19])].shape[0]))
+        print('{} avg better={}'.format(ENV_FLAG, record[9][record[9] > record[17]].shape[0]))
+        print('{} 5%-tile better={}'.format(ENV_FLAG, record[11][record[11] > record[19]].shape[0]))
+        print('{} both better={}'.format(ENV_FLAG, record[(record[9] > record[17]) & (record[11] > record[19])].shape[0]))
 
         print('RL avg better={}'.format(record[17][record[17] > record[9]].shape[0]))
         print('RL 5%-tile better={}'.format(record[19][record[19] > record[11]].shape[0]))
